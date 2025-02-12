@@ -1,12 +1,24 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { Shopify } = require('@shopify/shopify-api');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// CORS-Konfiguration
+app.use(cors({
+  origin: process.env.SHOPIFY_SHOP_URL,
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
+
 app.use(express.json());
+
+// Shopify-Konfiguration
+const client = new Shopify.Clients.Rest(
+  process.env.SHOPIFY_SHOP_URL,
+  process.env.SHOPIFY_ACCESS_TOKEN
+);
 
 // Test-Route
 app.get('/', (req, res) => {
@@ -21,84 +33,56 @@ app.post('/rate-product', async (req, res) => {
     const { productId, rating } = req.body;
     
     if (!productId || !rating) {
-      throw new Error('ProductId and rating are required');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'ProductId and rating are required' 
+      });
     }
 
-    // Shopify GraphQL Client
-    const client = new Shopify.Clients.Graphql(
-      process.env.SHOP_URL,
-      process.env.SHOPIFY_ACCESS_TOKEN
-    );
-
-    // Aktuelle Metafields abrufen
-    const { product } = await client.query({
-      data: `{
-        product(id: "gid://shopify/Product/${productId}") {
-          metafields(first: 10) {
-            edges {
-              node {
-                id
-                key
-                value
-              }
-            }
-          }
-        }
-      }`
+    // Produkt-Metafields abrufen
+    const productResponse = await client.get({
+      path: `products/${productId}/metafields`
     });
 
-    console.log('Retrieved product data:', product);
-
-    // Berechnung der neuen Werte
-    const metafields = product.metafields.edges;
-    const currentTotal = parseInt(metafields.find(m => m.node.key === 'total_ratings')?.node.value || '0');
-    const currentAverage = parseFloat(metafields.find(m => m.node.key === 'average_rating')?.node.value || '0');
-
+    const metafields = productResponse.body.metafields;
+    const currentTotal = parseInt(metafields.find(m => m.key === 'total_ratings')?.value || '0');
+    const currentAverage = parseFloat(metafields.find(m => m.key === 'average_rating')?.value || '0');
+    
+    // Neue Werte berechnen
     const newTotal = currentTotal + 1;
     const newAverage = ((currentAverage * currentTotal) + rating) / newTotal;
 
-    console.log('Calculated new values:', { newTotal, newAverage });
-
     // Metafields aktualisieren
-    await client.query({
-      data: {
-        query: `mutation productUpdate($input: ProductInput!) {
-          productUpdate(input: $input) {
-            product {
-              id
-            }
-          }
-        }`,
-        variables: {
-          input: {
-            id: `gid://shopify/Product/${productId}`,
-            metafields: [
-              {
-                namespace: "custom",
-                key: "average_rating",
-                value: newAverage.toString(),
-                type: "decimal"
-              },
-              {
-                namespace: "custom",
-                key: "total_ratings",
-                value: newTotal.toString(),
-                type: "integer"
-              }
-            ]
+    await Promise.all([
+      client.post({
+        path: `products/${productId}/metafields`,
+        data: {
+          metafield: {
+            namespace: 'custom',
+            key: 'average_rating',
+            value: newAverage.toString(),
+            type: 'decimal'
           }
         }
-      }
-    });
-
-    console.log('Successfully updated product ratings');
+      }),
+      client.post({
+        path: `products/${productId}/metafields`,
+        data: {
+          metafield: {
+            namespace: 'custom',
+            key: 'total_ratings',
+            value: newTotal.toString(),
+            type: 'integer'
+          }
+        }
+      })
+    ]);
 
     res.json({ 
       success: true, 
       newAverage, 
       newTotal 
     });
-
   } catch (error) {
     console.error('Error processing rating:', error);
     res.status(500).json({ 
