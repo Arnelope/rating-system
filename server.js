@@ -8,15 +8,16 @@ const PORT = process.env.PORT || 3000;
 // In-Memory Cache für Rate Limiting
 const ratingAttempts = new Map();
 
-// Rate Limiting Funktion
+// Verbesserte Rate Limiting Funktion
 function isRateLimited(userId, productId) {
+  if (!userId) return true; // Keine Bewertung ohne userId erlauben
+  
   const key = `${userId}_${productId}`;
   const now = Date.now();
   const attemptData = ratingAttempts.get(key);
 
   if (attemptData) {
     const timeSinceLastAttempt = now - attemptData.timestamp;
-    // 24 Stunden in Millisekunden
     if (timeSinceLastAttempt < 24 * 60 * 60 * 1000) {
       return true;
     }
@@ -24,39 +25,31 @@ function isRateLimited(userId, productId) {
   return false;
 }
 
-// Middleware und Basis-Setup
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
-}));
-
+app.use(cors());
 app.use(express.json());
 
-// Bewertungs-Route mit verbessertem Rate Limiting
+// Hauptroute für Bewertungen
 app.post('/rate-product', async (req, res) => {
   try {
     const { productId, rating, userId } = req.body;
     
-    if (!productId || !rating) {
+    // Validierung
+    if (!productId || !rating || !userId) {
       return res.status(400).json({
         success: false,
-        error: 'ProductId und rating sind erforderlich'
+        error: 'ProductId, rating und userId sind erforderlich'
       });
     }
 
-    // Generiere eine eindeutige ID basierend auf IP oder Session wenn keine userId vorhanden
-    const uniqueId = userId || req.ip;
-    
-    // Prüfe Rate Limiting
-    if (isRateLimited(uniqueId, productId)) {
+    // Rate Limiting Check
+    if (isRateLimited(userId, productId)) {
       return res.status(429).json({
         success: false,
-        error: 'Bitte warten Sie 24 Stunden bis zur nächsten Bewertung'
+        error: 'Sie können dieses Produkt erst in 24 Stunden wieder bewerten'
       });
     }
 
-    // Hole aktuelle Metafields
+    // Metafields abrufen
     const metafieldsResponse = await axios.get(
       `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
       {
@@ -73,11 +66,10 @@ app.post('/rate-product', async (req, res) => {
     const currentTotal = parseInt(totalRatingsField?.value || '0');
     const currentAverage = parseFloat(averageRatingField?.value || '0');
 
-    // Berechne neue Werte
     const newTotal = currentTotal + 1;
     const newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
 
-    // Aktualisiere Metafields
+    // Metafields aktualisieren
     await Promise.all([
       axios.post(
         `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
@@ -114,7 +106,7 @@ app.post('/rate-product', async (req, res) => {
     ]);
 
     // Speichere Rate Limiting Information
-    ratingAttempts.set(`${uniqueId}_${productId}`, {
+    ratingAttempts.set(`${userId}_${productId}`, {
       timestamp: Date.now()
     });
 
@@ -134,23 +126,13 @@ app.post('/rate-product', async (req, res) => {
   }
 });
 
-// Reset-Route (nur für autorisierte Admins)
-app.post('/reset-ratings', async (req, res) => {
+// Interne Reset-Route
+app.get('/internal-reset', async (req, res) => {
   try {
-    const { productId, adminKey } = req.body;
-
-    // Überprüfe Admin-Berechtigung
-    if (adminKey !== process.env.ADMIN_SECRET_KEY) {
-      return res.status(401).json({
-        success: false,
-        error: 'Nicht autorisiert'
-      });
-    }
-
     // Setze Metafields zurück
     await Promise.all([
       axios.post(
-        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
+        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/9037639614813/metafields.json`,
         {
           metafield: {
             namespace: 'custom',
@@ -166,7 +148,7 @@ app.post('/reset-ratings', async (req, res) => {
         }
       ),
       axios.post(
-        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
+        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/9037639614813/metafields.json`,
         {
           metafield: {
             namespace: 'custom',
@@ -183,77 +165,21 @@ app.post('/reset-ratings', async (req, res) => {
       )
     ]);
 
-    // Lösche alle Rate-Limiting-Einträge für dieses Produkt
-    for (const [key, value] of ratingAttempts.entries()) {
-      if (key.includes(productId)) {
-        ratingAttempts.delete(key);
-      }
-    }
+    // Lösche alle Rate-Limiting-Einträge
+    ratingAttempts.clear();
 
-    res.json({
-      success: true,
-      message: 'Bewertungen erfolgreich zurückgesetzt'
+    res.json({ 
+      success: true, 
+      message: 'Ratings und Rate-Limiting-Cache zurückgesetzt' 
     });
-
-  } catch (error) {
-    console.error('Reset-Fehler:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Fehler beim Zurücksetzen der Bewertungen'
-    });
-  }
-});
-app.get('/internal-reset', async (req, res) => {
-  try {
-    await axios.post(
-      `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/9037639614813/metafields.json`,
-      {
-        metafield: {
-          namespace: 'custom',
-          key: 'average_rating',
-          value: '0',
-          type: 'number_decimal'
-        }
-      },
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
-        }
-      }
-    );
-
-    await axios.post(
-      `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/9037639614813/metafields.json`,
-      {
-        metafield: {
-          namespace: 'custom',
-          key: 'total_ratings',
-          value: '0',
-          type: 'number_integer'
-        }
-      },
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
-        }
-      }
-    );
-
-    res.json({ success: true, message: 'Ratings reset successful' });
   } catch (error) {
     console.error('Reset error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 });
-// Cleanup-Job für alte Rate-Limiting-Einträge
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of ratingAttempts.entries()) {
-    if (now - value.timestamp > 24 * 60 * 60 * 1000) {
-      ratingAttempts.delete(key);
-    }
-  }
-}, 60 * 60 * 1000); // Führe jede Stunde aus
 
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
