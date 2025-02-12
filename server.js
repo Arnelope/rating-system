@@ -5,7 +5,12 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS-Konfiguration
+console.log('Starting server with config:', {
+  shopUrl: process.env.SHOPIFY_SHOP_URL,
+  hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN,
+  tokenFirstChars: process.env.SHOPIFY_ACCESS_TOKEN ? process.env.SHOPIFY_ACCESS_TOKEN.substring(0, 4) : 'none'
+});
+
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST'],
@@ -14,26 +19,50 @@ app.use(cors({
 
 app.use(express.json());
 
+app.use(express.json());
+
 // Debug-Route
 app.get('/debug', async (req, res) => {
+  console.log('Debug route called');
+  
   try {
-    // Test Shopify-Verbindung
-    const shopifyResponse = await axios.get(`https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/shop.json`, {
+    if (!process.env.SHOPIFY_SHOP_URL) {
+      throw new Error('SHOPIFY_SHOP_URL is not set');
+    }
+    if (!process.env.SHOPIFY_ACCESS_TOKEN) {
+      throw new Error('SHOPIFY_ACCESS_TOKEN is not set');
+    }
+
+    const shopifyUrl = `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/shop.json`;
+    console.log('Attempting to connect to Shopify:', shopifyUrl);
+
+    const shopifyResponse = await axios.get(shopifyUrl, {
       headers: {
         'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
       }
     });
-    
+
     res.json({
-      status: 'online',
-      shopify_connection: 'successful',
-      shop_info: shopifyResponse.data
+      status: 'success',
+      config: {
+        shopUrl: process.env.SHOPIFY_SHOP_URL,
+        hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN
+      },
+      shopifyData: shopifyResponse.data
     });
   } catch (error) {
+    console.error('Debug route error:', {
+      message: error.message,
+      stack: error.stack
+    });
+
     res.status(500).json({
       status: 'error',
-      message: error.message,
-      shopify_url: process.env.SHOPIFY_SHOP_URL
+      error: error.message,
+      config: {
+        shopUrl: process.env.SHOPIFY_SHOP_URL,
+        hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN
+      }
     });
   }
 });
