@@ -8,9 +8,8 @@ const PORT = process.env.PORT || 3000;
 // In-Memory Cache für Rate Limiting
 const ratingAttempts = new Map();
 
-// Verbesserte Rate Limiting Funktion
 function isRateLimited(userId, productId) {
-  if (!userId) return true; // Keine Bewertung ohne userId erlauben
+  if (!userId) return true;
   
   const key = `${userId}_${productId}`;
   const now = Date.now();
@@ -25,15 +24,17 @@ function isRateLimited(userId, productId) {
   return false;
 }
 
-app.use(cors());
-app.use(express.json());
+// Füge diese neue Funktion hinzu
+function getPreviousRating(userId, productId) {
+  const key = `${userId}_${productId}`;
+  const attemptData = ratingAttempts.get(key);
+  return attemptData ? attemptData.rating : null;
+}
 
-// Hauptroute für Bewertungen
 app.post('/rate-product', async (req, res) => {
   try {
     const { productId, rating, userId } = req.body;
     
-    // Validierung
     if (!productId || !rating || !userId) {
       return res.status(400).json({
         success: false,
@@ -41,15 +42,23 @@ app.post('/rate-product', async (req, res) => {
       });
     }
 
-    // Rate Limiting Check
-    if (isRateLimited(userId, productId)) {
-      return res.status(429).json({
-        success: false,
-        error: 'Sie können dieses Produkt erst in 24 Stunden wieder bewerten'
-      });
+    const key = `${userId}_${productId}`;
+    const previousRating = getPreviousRating(userId, productId);
+    const now = Date.now();
+    const attemptData = ratingAttempts.get(key);
+
+    // Prüfe ob 24 Stunden vergangen sind für Update
+    if (attemptData) {
+      const timeSinceLastAttempt = now - attemptData.timestamp;
+      if (timeSinceLastAttempt < 24 * 60 * 60 * 1000) {
+        return res.status(429).json({
+          success: false,
+          error: 'Sie können dieses Produkt erst in 24 Stunden wieder bewerten'
+        });
+      }
     }
 
-    // Metafields abrufen
+    // Hole aktuelle Metafields
     const metafieldsResponse = await axios.get(
       `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
       {
@@ -66,10 +75,20 @@ app.post('/rate-product', async (req, res) => {
     const currentTotal = parseInt(totalRatingsField?.value || '0');
     const currentAverage = parseFloat(averageRatingField?.value || '0');
 
-    const newTotal = currentTotal + 1;
-    const newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
+    let newTotal, newAverage;
 
-    // Metafields aktualisieren
+    if (previousRating) {
+      // Update existierende Bewertung
+      const totalWithoutPrevious = currentTotal * currentAverage - previousRating;
+      newTotal = currentTotal; // Gesamtzahl bleibt gleich
+      newAverage = (totalWithoutPrevious + parseFloat(rating)) / currentTotal;
+    } else {
+      // Neue Bewertung
+      newTotal = currentTotal + 1;
+      newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
+    }
+
+    // Aktualisiere Metafields
     await Promise.all([
       axios.post(
         `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
@@ -105,16 +124,17 @@ app.post('/rate-product', async (req, res) => {
       )
     ]);
 
-    // Speichere Rate Limiting Information
-    ratingAttempts.set(`${userId}_${productId}`, {
-      timestamp: Date.now()
+    // Speichere neue Bewertung und Timestamp
+    ratingAttempts.set(key, {
+      timestamp: now,
+      rating: parseFloat(rating)
     });
 
     res.json({
       success: true,
       newAverage: parseFloat(newAverage.toFixed(2)),
       newTotal,
-      message: 'Bewertung erfolgreich gespeichert'
+      message: previousRating ? 'Bewertung erfolgreich aktualisiert' : 'Bewertung erfolgreich gespeichert'
     });
 
   } catch (error) {
