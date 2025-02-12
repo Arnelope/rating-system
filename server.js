@@ -4,6 +4,11 @@ const cors = require('cors');
 const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Wichtig: express.json() Middleware VOR den CORS-Einstellungen
+app.use(express.json());
+
+// CORS Konfiguration
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -12,19 +17,18 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-// Fügen Sie diesen zusätzlichen Middleware hinzu
+// CORS Headers
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Credentials', true);
   
-  // Handle OPTIONS method
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
 });
+
 // In-Memory Cache für Rate Limiting
 const ratingAttempts = new Map();
 
@@ -44,13 +48,13 @@ function isRateLimited(userId, productId) {
   return false;
 }
 
-// Füge diese neue Funktion hinzu
 function getPreviousRating(userId, productId) {
   const key = `${userId}_${productId}`;
   const attemptData = ratingAttempts.get(key);
   return attemptData ? attemptData.rating : null;
 }
 
+// Rating Route
 app.post('/rate-product', async (req, res) => {
   try {
     const { productId, rating, userId } = req.body;
@@ -67,7 +71,6 @@ app.post('/rate-product', async (req, res) => {
     const now = Date.now();
     const attemptData = ratingAttempts.get(key);
 
-    // Prüfe ob 24 Stunden vergangen sind für Update
     if (attemptData) {
       const timeSinceLastAttempt = now - attemptData.timestamp;
       if (timeSinceLastAttempt < 24 * 60 * 60 * 1000) {
@@ -78,7 +81,6 @@ app.post('/rate-product', async (req, res) => {
       }
     }
 
-    // Hole aktuelle Metafields
     const metafieldsResponse = await axios.get(
       `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
       {
@@ -98,17 +100,14 @@ app.post('/rate-product', async (req, res) => {
     let newTotal, newAverage;
 
     if (previousRating) {
-      // Update existierende Bewertung
       const totalWithoutPrevious = currentTotal * currentAverage - previousRating;
-      newTotal = currentTotal; // Gesamtzahl bleibt gleich
+      newTotal = currentTotal;
       newAverage = (totalWithoutPrevious + parseFloat(rating)) / currentTotal;
     } else {
-      // Neue Bewertung
       newTotal = currentTotal + 1;
       newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
     }
 
-    // Aktualisiere Metafields
     await Promise.all([
       axios.post(
         `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
@@ -144,7 +143,6 @@ app.post('/rate-product', async (req, res) => {
       )
     ]);
 
-    // Speichere neue Bewertung und Timestamp
     ratingAttempts.set(key, {
       timestamp: now,
       rating: parseFloat(rating)
@@ -166,10 +164,9 @@ app.post('/rate-product', async (req, res) => {
   }
 });
 
-// Interne Reset-Route
+// Reset Route
 app.get('/internal-reset', async (req, res) => {
   try {
-    // Hole alle Produkte
     const productsResponse = await axios.get(
       `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products.json`,
       {
@@ -182,7 +179,6 @@ app.get('/internal-reset', async (req, res) => {
     const products = productsResponse.data.products;
     console.log(`Gefundene Produkte zum Zurücksetzen: ${products.length}`);
 
-    // Setze für jedes Produkt die Bewertungen zurück
     for (const product of products) {
       try {
         await Promise.all([
@@ -225,7 +221,6 @@ app.get('/internal-reset', async (req, res) => {
       }
     }
 
-    // Lösche alle Rate-Limiting-Einträge
     ratingAttempts.clear();
     console.log('Rate-Limiting-Cache geleert');
 
