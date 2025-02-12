@@ -72,7 +72,16 @@ app.post('/rate-product', async (req, res) => {
         error: 'ProductId und rating sind erforderlich'
       });
     }
-
+app.post('/reset-ratings', async (req, res) => {
+  const { productId } = req.body;
+  
+  try {
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        error: 'ProductId ist erforderlich'
+      });
+    }
     // Metafields abrufen
     const metafieldsResponse = await axios.get(
       `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
@@ -106,7 +115,7 @@ app.post('/rate-product', async (req, res) => {
           metafield: {
             namespace: 'custom',
             key: 'average_rating',
-            value: newAverage.toFixed(2),
+            value: '0',
             type: 'number_decimal'
           }
         },
@@ -122,7 +131,7 @@ app.post('/rate-product', async (req, res) => {
           metafield: {
             namespace: 'custom',
             key: 'total_ratings',
-            value: newTotal.toString(),
+            value: '0',
             type: 'number_integer'
           }
         },
@@ -135,26 +144,16 @@ app.post('/rate-product', async (req, res) => {
     ];
 
     await Promise.all(updatePromises);
-    console.log('Metafields erfolgreich aktualisiert');
-
+    
     res.json({
       success: true,
-      newAverage: parseFloat(newAverage.toFixed(2)),
-      newTotal,
-      message: 'Bewertung erfolgreich gespeichert'
+      message: 'Bewertungen wurden zurückgesetzt'
     });
-
   } catch (error) {
-    console.error('Detaillierter Fehler:', {
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status
-    });
-
+    console.error('Reset error:', error);
     res.status(500).json({
       success: false,
-      error: 'Serverfehler bei der Bewertungsverarbeitung',
-      details: error.message
+      error: 'Fehler beim Zurücksetzen der Bewertungen'
     });
   }
 });
