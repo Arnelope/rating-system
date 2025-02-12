@@ -5,67 +5,76 @@ const { Shopify } = require('@shopify/shopify-api');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS-Konfiguration
+// Erweiterte CORS-Konfiguration
 app.use(cors({
-  origin: process.env.SHOPIFY_SHOP_URL,
+  origin: '*', // Später auf deine Shopify-Domain einschränken
   methods: ['GET', 'POST'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
 
-// Shopify-Konfiguration
-const client = new Shopify.Clients.Rest(
+// Shopify Admin API konfigurieren
+const shopify = new Shopify.Clients.Rest(
   process.env.SHOPIFY_SHOP_URL,
   process.env.SHOPIFY_ACCESS_TOKEN
 );
 
-// Test-Route
-app.get('/', (req, res) => {
-  res.send('Rating System Backend is running!');
+// Debug-Route
+app.get('/debug', (req, res) => {
+  res.json({
+    status: 'online',
+    environment: process.env.NODE_ENV,
+    shopUrl: process.env.SHOPIFY_SHOP_URL
+  });
 });
 
-// Rating-Route
+// Hauptroute für Bewertungen
 app.post('/rate-product', async (req, res) => {
-  console.log('Received rating request:', req.body);
+  console.log('Bewertungsanfrage erhalten:', req.body);
   
   try {
     const { productId, rating } = req.body;
     
     if (!productId || !rating) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'ProductId and rating are required' 
+      return res.status(400).json({
+        success: false,
+        error: 'Produkt-ID und Bewertung sind erforderlich'
       });
     }
 
-    // Produkt-Metafields abrufen
-    const productResponse = await client.get({
+    // Aktuelle Metafields abrufen
+    const metafieldsResponse = await shopify.get({
       path: `products/${productId}/metafields`
     });
 
-    const metafields = productResponse.body.metafields;
+    console.log('Aktuelle Metafields:', metafieldsResponse.body);
+
+    // Aktuelle Werte extrahieren
+    const metafields = metafieldsResponse.body.metafields;
     const currentTotal = parseInt(metafields.find(m => m.key === 'total_ratings')?.value || '0');
     const currentAverage = parseFloat(metafields.find(m => m.key === 'average_rating')?.value || '0');
-    
+
     // Neue Werte berechnen
     const newTotal = currentTotal + 1;
-    const newAverage = ((currentAverage * currentTotal) + rating) / newTotal;
+    const newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
+
+    console.log('Neue Werte berechnet:', { newTotal, newAverage });
 
     // Metafields aktualisieren
-    await Promise.all([
-      client.post({
+    const updatePromises = [
+      shopify.post({
         path: `products/${productId}/metafields`,
         data: {
           metafield: {
             namespace: 'custom',
             key: 'average_rating',
-            value: newAverage.toString(),
+            value: newAverage.toFixed(2),
             type: 'decimal'
           }
         }
       }),
-      client.post({
+      shopify.post({
         path: `products/${productId}/metafields`,
         data: {
           metafield: {
@@ -76,22 +85,34 @@ app.post('/rate-product', async (req, res) => {
           }
         }
       })
-    ]);
+    ];
 
-    res.json({ 
-      success: true, 
-      newAverage, 
-      newTotal 
+    await Promise.all(updatePromises);
+    console.log('Metafields erfolgreich aktualisiert');
+
+    res.json({
+      success: true,
+      newAverage: parseFloat(newAverage.toFixed(2)),
+      newTotal,
+      message: 'Bewertung erfolgreich gespeichert'
     });
+
   } catch (error) {
-    console.error('Error processing rating:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    console.error('Fehler bei der Verarbeitung der Bewertung:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Serverfehler bei der Bewertungsverarbeitung',
+      details: error.message
     });
   }
 });
 
+// Server starten
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server läuft auf Port ${PORT}`);
+  console.log('Umgebungsvariablen geladen:', {
+    port: PORT,
+    nodeEnv: process.env.NODE_ENV,
+    shopUrl: process.env.SHOPIFY_SHOP_URL
+  });
 });
