@@ -5,16 +5,14 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Erweiterte CORS-Konfiguration
 app.use(cors({
-  origin: ['https://sampleverse.io', 'https://www.sampleverse.io'],
+  origin: '*',
   methods: ['GET', 'POST'],
-  credentials: true
+  allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
-// Rating-Route mit verbessertem Error-Handling
 app.post('/rate-product', async (req, res) => {
   console.log('Bewertungsanfrage erhalten:', req.body);
   
@@ -28,34 +26,28 @@ app.post('/rate-product', async (req, res) => {
       });
     }
 
-    console.log('Abrufen der Metafields für Produkt:', productId);
-
     // Metafields abrufen
-    const metafieldsUrl = `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`;
-    console.log('Metafields URL:', metafieldsUrl);
-
-    const metafieldsResponse = await axios.get(metafieldsUrl, {
-      headers: {
-        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-        'Content-Type': 'application/json'
+    const metafieldsResponse = await axios.get(
+      `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+        }
       }
-    });
-
-    console.log('Metafields Response:', metafieldsResponse.data);
+    );
 
     const metafields = metafieldsResponse.data.metafields;
-    const currentTotal = parseInt(metafields.find(m => m.key === 'total_ratings')?.value || '0');
-    const currentAverage = parseFloat(metafields.find(m => m.key === 'average_rating')?.value || '0');
+    const totalRatingsField = metafields.find(m => m.key === 'total_ratings' && m.namespace === 'custom');
+    const averageRatingField = metafields.find(m => m.key === 'average_rating' && m.namespace === 'custom');
 
-    console.log('Aktuelle Werte:', { currentTotal, currentAverage });
+    const currentTotal = parseInt(totalRatingsField?.value || '0');
+    const currentAverage = parseFloat(averageRatingField?.value || '0');
 
     // Neue Werte berechnen
     const newTotal = currentTotal + 1;
     const newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
 
-    console.log('Neue Werte:', { newTotal, newAverage });
-
-    // Metafields aktualisieren
+    // Update oder erstelle Metafields
     const updatePromises = [
       axios.post(
         `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
@@ -64,13 +56,12 @@ app.post('/rate-product', async (req, res) => {
             namespace: 'custom',
             key: 'average_rating',
             value: newAverage.toFixed(2),
-            type: 'decimal'
+            type: 'number_decimal'
           }
         },
         {
           headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-            'Content-Type': 'application/json'
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
           }
         }
       ),
@@ -81,20 +72,18 @@ app.post('/rate-product', async (req, res) => {
             namespace: 'custom',
             key: 'total_ratings',
             value: newTotal.toString(),
-            type: 'integer'
+            type: 'number_integer'
           }
         },
         {
           headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-            'Content-Type': 'application/json'
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
           }
         }
       )
     ];
 
     await Promise.all(updatePromises);
-    console.log('Metafields erfolgreich aktualisiert');
 
     res.json({
       success: true,
@@ -107,28 +96,17 @@ app.post('/rate-product', async (req, res) => {
     console.error('Detaillierter Fehler:', {
       message: error.message,
       response: error.response?.data,
-      status: error.response?.status,
-      config: {
-        url: error.config?.url,
-        method: error.config?.method,
-        headers: error.config?.headers
-      }
+      status: error.response?.status
     });
 
     res.status(500).json({
       success: false,
       error: 'Serverfehler bei der Bewertungsverarbeitung',
-      details: error.message,
-      shopifyError: error.response?.data
+      details: error.message
     });
   }
 });
 
-// Server starten
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
-  console.log('Environment:', {
-    shopUrl: process.env.SHOPIFY_SHOP_URL,
-    hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN
-  });
 });
