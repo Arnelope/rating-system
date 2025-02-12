@@ -5,69 +5,16 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-console.log('Starting server with config:', {
-  shopUrl: process.env.SHOPIFY_SHOP_URL,
-  hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN,
-  tokenFirstChars: process.env.SHOPIFY_ACCESS_TOKEN ? process.env.SHOPIFY_ACCESS_TOKEN.substring(0, 4) : 'none'
-});
-
+// Erweiterte CORS-Konfiguration
 app.use(cors({
-  origin: '*',
+  origin: ['https://sampleverse.io', 'https://www.sampleverse.io'],
   methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
+  credentials: true
 }));
 
 app.use(express.json());
 
-app.use(express.json());
-
-// Debug-Route
-app.get('/debug', async (req, res) => {
-  console.log('Debug route called');
-  
-  try {
-    if (!process.env.SHOPIFY_SHOP_URL) {
-      throw new Error('SHOPIFY_SHOP_URL is not set');
-    }
-    if (!process.env.SHOPIFY_ACCESS_TOKEN) {
-      throw new Error('SHOPIFY_ACCESS_TOKEN is not set');
-    }
-
-    const shopifyUrl = `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/shop.json`;
-    console.log('Attempting to connect to Shopify:', shopifyUrl);
-
-    const shopifyResponse = await axios.get(shopifyUrl, {
-      headers: {
-        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
-      }
-    });
-
-    res.json({
-      status: 'success',
-      config: {
-        shopUrl: process.env.SHOPIFY_SHOP_URL,
-        hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN
-      },
-      shopifyData: shopifyResponse.data
-    });
-  } catch (error) {
-    console.error('Debug route error:', {
-      message: error.message,
-      stack: error.stack
-    });
-
-    res.status(500).json({
-      status: 'error',
-      error: error.message,
-      config: {
-        shopUrl: process.env.SHOPIFY_SHOP_URL,
-        hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN
-      }
-    });
-  }
-});
-
-// Rating-Route
+// Rating-Route mit verbessertem Error-Handling
 app.post('/rate-product', async (req, res) => {
   console.log('Bewertungsanfrage erhalten:', req.body);
   
@@ -77,27 +24,36 @@ app.post('/rate-product', async (req, res) => {
     if (!productId || !rating) {
       return res.status(400).json({
         success: false,
-        error: 'Produkt-ID und Bewertung sind erforderlich'
+        error: 'ProductId und rating sind erforderlich'
       });
     }
 
-    // Aktuelle Metafields abrufen
-    const metafieldsResponse = await axios.get(
-      `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
-        }
+    console.log('Abrufen der Metafields für Produkt:', productId);
+
+    // Metafields abrufen
+    const metafieldsUrl = `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`;
+    console.log('Metafields URL:', metafieldsUrl);
+
+    const metafieldsResponse = await axios.get(metafieldsUrl, {
+      headers: {
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        'Content-Type': 'application/json'
       }
-    );
+    });
+
+    console.log('Metafields Response:', metafieldsResponse.data);
 
     const metafields = metafieldsResponse.data.metafields;
     const currentTotal = parseInt(metafields.find(m => m.key === 'total_ratings')?.value || '0');
     const currentAverage = parseFloat(metafields.find(m => m.key === 'average_rating')?.value || '0');
 
+    console.log('Aktuelle Werte:', { currentTotal, currentAverage });
+
     // Neue Werte berechnen
     const newTotal = currentTotal + 1;
     const newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
+
+    console.log('Neue Werte:', { newTotal, newAverage });
 
     // Metafields aktualisieren
     const updatePromises = [
@@ -113,7 +69,8 @@ app.post('/rate-product', async (req, res) => {
         },
         {
           headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            'Content-Type': 'application/json'
           }
         }
       ),
@@ -129,13 +86,15 @@ app.post('/rate-product', async (req, res) => {
         },
         {
           headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            'Content-Type': 'application/json'
           }
         }
       )
     ];
 
     await Promise.all(updatePromises);
+    console.log('Metafields erfolgreich aktualisiert');
 
     res.json({
       success: true,
@@ -145,15 +104,31 @@ app.post('/rate-product', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Fehler bei der Verarbeitung der Bewertung:', error);
+    console.error('Detaillierter Fehler:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status,
+      config: {
+        url: error.config?.url,
+        method: error.config?.method,
+        headers: error.config?.headers
+      }
+    });
+
     res.status(500).json({
       success: false,
       error: 'Serverfehler bei der Bewertungsverarbeitung',
-      details: error.message
+      details: error.message,
+      shopifyError: error.response?.data
     });
   }
 });
 
+// Server starten
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
+  console.log('Environment:', {
+    shopUrl: process.env.SHOPIFY_SHOP_URL,
+    hasToken: !!process.env.SHOPIFY_ACCESS_TOKEN
+  });
 });
