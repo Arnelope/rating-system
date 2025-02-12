@@ -149,48 +149,70 @@ app.post('/rate-product', async (req, res) => {
 // Interne Reset-Route
 app.get('/internal-reset', async (req, res) => {
   try {
-    // Setze Metafields zurück
-    await Promise.all([
-      axios.post(
-        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/9037639614813/metafields.json`,
-        {
-          metafield: {
-            namespace: 'custom',
-            key: 'average_rating',
-            value: '0',
-            type: 'number_decimal'
-          }
-        },
-        {
-          headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
-          }
+    // Hole alle Produkte
+    const productsResponse = await axios.get(
+      `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
         }
-      ),
-      axios.post(
-        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/9037639614813/metafields.json`,
-        {
-          metafield: {
-            namespace: 'custom',
-            key: 'total_ratings',
-            value: '0',
-            type: 'number_integer'
-          }
-        },
-        {
-          headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
-          }
-        }
-      )
-    ]);
+      }
+    );
+
+    const products = productsResponse.data.products;
+    console.log(`Gefundene Produkte zum Zurücksetzen: ${products.length}`);
+
+    // Setze für jedes Produkt die Bewertungen zurück
+    for (const product of products) {
+      try {
+        await Promise.all([
+          axios.post(
+            `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${product.id}/metafields.json`,
+            {
+              metafield: {
+                namespace: 'custom',
+                key: 'average_rating',
+                value: '0',
+                type: 'number_decimal'
+              }
+            },
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+              }
+            }
+          ),
+          axios.post(
+            `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${product.id}/metafields.json`,
+            {
+              metafield: {
+                namespace: 'custom',
+                key: 'total_ratings',
+                value: '0',
+                type: 'number_integer'
+              }
+            },
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+              }
+            }
+          )
+        ]);
+        console.log(`Bewertungen für Produkt ${product.id} zurückgesetzt`);
+      } catch (error) {
+        console.error(`Fehler beim Zurücksetzen von Produkt ${product.id}:`, error.message);
+      }
+    }
 
     // Lösche alle Rate-Limiting-Einträge
     ratingAttempts.clear();
+    console.log('Rate-Limiting-Cache geleert');
 
     res.json({ 
       success: true, 
-      message: 'Ratings und Rate-Limiting-Cache zurückgesetzt' 
+      message: `Bewertungen für ${products.length} Produkte zurückgesetzt`,
+      resetCount: products.length
     });
   } catch (error) {
     console.error('Reset error:', error);
