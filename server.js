@@ -1,35 +1,44 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Shopify } = require('@shopify/shopify-api');
+const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Erweiterte CORS-Konfiguration
+// CORS-Konfiguration
 app.use(cors({
-  origin: '*', // Später auf deine Shopify-Domain einschränken
+  origin: '*',
   methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
-// Shopify Admin API konfigurieren
-const shopify = new Shopify.Clients.Rest(
-  process.env.SHOPIFY_SHOP_URL,
-  process.env.SHOPIFY_ACCESS_TOKEN
-);
-
 // Debug-Route
-app.get('/debug', (req, res) => {
-  res.json({
-    status: 'online',
-    environment: process.env.NODE_ENV,
-    shopUrl: process.env.SHOPIFY_SHOP_URL
-  });
+app.get('/debug', async (req, res) => {
+  try {
+    // Test Shopify-Verbindung
+    const shopifyResponse = await axios.get(`https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/shop.json`, {
+      headers: {
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+      }
+    });
+    
+    res.json({
+      status: 'online',
+      shopify_connection: 'successful',
+      shop_info: shopifyResponse.data
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      shopify_url: process.env.SHOPIFY_SHOP_URL
+    });
+  }
 });
 
-// Hauptroute für Bewertungen
+// Rating-Route
 app.post('/rate-product', async (req, res) => {
   console.log('Bewertungsanfrage erhalten:', req.body);
   
@@ -44,14 +53,16 @@ app.post('/rate-product', async (req, res) => {
     }
 
     // Aktuelle Metafields abrufen
-    const metafieldsResponse = await shopify.get({
-      path: `products/${productId}/metafields`
-    });
+    const metafieldsResponse = await axios.get(
+      `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+        }
+      }
+    );
 
-    console.log('Aktuelle Metafields:', metafieldsResponse.body);
-
-    // Aktuelle Werte extrahieren
-    const metafields = metafieldsResponse.body.metafields;
+    const metafields = metafieldsResponse.data.metafields;
     const currentTotal = parseInt(metafields.find(m => m.key === 'total_ratings')?.value || '0');
     const currentAverage = parseFloat(metafields.find(m => m.key === 'average_rating')?.value || '0');
 
@@ -59,36 +70,43 @@ app.post('/rate-product', async (req, res) => {
     const newTotal = currentTotal + 1;
     const newAverage = ((currentAverage * currentTotal) + parseFloat(rating)) / newTotal;
 
-    console.log('Neue Werte berechnet:', { newTotal, newAverage });
-
     // Metafields aktualisieren
     const updatePromises = [
-      shopify.post({
-        path: `products/${productId}/metafields`,
-        data: {
+      axios.post(
+        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
+        {
           metafield: {
             namespace: 'custom',
             key: 'average_rating',
             value: newAverage.toFixed(2),
             type: 'decimal'
           }
+        },
+        {
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+          }
         }
-      }),
-      shopify.post({
-        path: `products/${productId}/metafields`,
-        data: {
+      ),
+      axios.post(
+        `https://${process.env.SHOPIFY_SHOP_URL}/admin/api/2024-01/products/${productId}/metafields.json`,
+        {
           metafield: {
             namespace: 'custom',
             key: 'total_ratings',
             value: newTotal.toString(),
             type: 'integer'
           }
+        },
+        {
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN
+          }
         }
-      })
+      )
     ];
 
     await Promise.all(updatePromises);
-    console.log('Metafields erfolgreich aktualisiert');
 
     res.json({
       success: true,
@@ -107,12 +125,6 @@ app.post('/rate-product', async (req, res) => {
   }
 });
 
-// Server starten
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
-  console.log('Umgebungsvariablen geladen:', {
-    port: PORT,
-    nodeEnv: process.env.NODE_ENV,
-    shopUrl: process.env.SHOPIFY_SHOP_URL
-  });
 });
