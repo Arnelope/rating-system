@@ -4,7 +4,7 @@ const cors = require('cors');
 const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
-
+console.log("Node version:", process.version);
 // Wichtig: express.json() Middleware VOR den CORS-Einstellungen
 app.use(express.json());
 
